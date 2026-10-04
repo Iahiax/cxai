@@ -1,10 +1,9 @@
 from __future__ import annotations
-import json, random, uuid
+import json, random
 from dataclasses import dataclass
 from typing import Callable, Optional
 import numpy as np
 import pandas as pd
-
 from data.storage import Storage
 from engines.backtest import BacktestConfig
 from engines.walk_forward import walk_forward
@@ -18,25 +17,17 @@ class Proposal:
     body: str
     metrics: dict
     score: float
-    status: str  # pending | accepted | rejected
+    status: str
 
 
 class SelfProposalEngine:
-    """
-    يولّد اقتراحات، يختبرها بـ walk-forward، يقيّمها،
-    ويحفظها في DuckDB + يرسلها على تيليجرام.
-    لا ينفّذ شيئًا تلقائيًا على الحساب — هذا مسؤولية طبقة أعلى.
-    """
-
     def __init__(self, storage: Storage, cfg: BacktestConfig,
-                 telegram: Optional[TelegramBot] = None,
-                 seed: int = 42):
+                 telegram: Optional[TelegramBot] = None, seed: int = 42):
         self.storage = storage
         self.cfg = cfg
         self.tg = telegram
         self.rng = random.Random(seed)
 
-    # ---------- generators ----------
     def _gen_param_mutations(self, base_params: dict, n: int = 5) -> list[dict]:
         out = []
         for _ in range(n):
@@ -50,21 +41,6 @@ class SelfProposalEngine:
             out.append(p)
         return out
 
-    def _gen_regime_rules(self, df: pd.DataFrame) -> list[dict]:
-        """قواعد تعتمد على ATR/ADX لتقييد التداول في ظروف محددة."""
-        from engines.indicators import atr, adx
-        a = atr(df, 14)
-        x = adx(df, 14)
-        return [
-            {"filter": "atr_low",  "expr": f"atr > {a.quantile(0.3):.6f}",
-             "rationale": "تفادي السوق الميّت"},
-            {"filter": "adx_hi",   "expr": f"adx > {x.quantile(0.6):.2f}",
-             "rationale": "تداول في اتجاهات قوية"},
-            {"filter": "atr_hi",   "expr": f"atr < {a.quantile(0.9):.6f}",
-             "rationale": "تفادي التذبذب المفرط"},
-        ]
-
-    # ---------- evaluation ----------
     def _score(self, summary: dict) -> float:
         if not summary:
             return -1e9
@@ -79,16 +55,12 @@ class SelfProposalEngine:
         wf = walk_forward(df, signal_fn, self.cfg, n_splits=n_splits)
         return {"summary": wf.summary, "score": self._score(wf.summary)}
 
-    # ---------- main loop ----------
     def propose(self, kind: str, title: str, body: str,
                 metrics: dict, score: float,
                 accept_threshold: float = 1.5) -> Proposal:
         status = "accepted" if score >= accept_threshold else "pending"
-        self.storage.add_proposal(
-            kind=kind, title=title, body=body,
-            meta={"metrics": metrics, "score": score},
-        )
-        # حدّث الحالة/النتيجة
+        self.storage.add_proposal(kind=kind, title=title, body=body,
+                                  meta={"metrics": metrics, "score": score})
         self.storage.con.execute("""
             UPDATE proposals SET status = ?, score = ?, metrics = ?
             WHERE id = (SELECT MAX(id) FROM proposals)
@@ -104,24 +76,20 @@ class SelfProposalEngine:
                 f"<b>الحالة:</b> {status}\n"
                 f"<b>الدرجة:</b> {score:.3f}\n"
                 f"<b>Sharpe:</b> {metrics.get('summary',{}).get('sharpe_mean',0):.2f}\n"
-                f"<b>Consistency:</b> {metrics.get('summary',{}).get('consistency',0):.2f}\n"
-                f"<b>Max DD:</b> {metrics.get('summary',{}).get('max_drawdown_mean',0):.2%}"
+                f"<b>Consistency:</b> {metrics.get('summary',{}).get('consistency',0):.2f}"
             )
             try:
                 self.tg.send(msg)
             except Exception as e:
                 print(f"[proposal] telegram failed: {e}")
-
         return prop
 
     def explore(self, df: pd.DataFrame,
                 base_signal_fn: Callable[[pd.DataFrame, dict], pd.Series],
                 base_params: dict,
                 n_mutations: int = 5) -> list[Proposal]:
-        """يولّد عدة اقتراحات، يختبر كل واحد، يعيد القائمة مرتبة."""
         candidates = self._gen_param_mutations(base_params, n_mutations)
         proposals: list[Proposal] = []
-
         for i, params in enumerate(candidates):
             def sig(d, p=params):
                 return base_signal_fn(d, p)
@@ -136,11 +104,9 @@ class SelfProposalEngine:
                 kind="param_mutation", title=title, body=body,
                 metrics=res, score=res["score"],
             ))
-
         proposals.sort(key=lambda p: p.score, reverse=True)
         return proposals
 
-    # ---------- قاعدة معرفة ----------
     def knowledge_summary(self) -> dict:
         df = self.storage.con.execute("""
             SELECT status, COUNT(*) n, AVG(score) avg_score
