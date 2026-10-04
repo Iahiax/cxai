@@ -46,10 +46,6 @@ def _side_cost(cfg: BacktestConfig, px: float) -> float:
 def run_backtest(candles: pd.DataFrame,
                  signal_fn: Callable[[pd.DataFrame], pd.Series],
                  cfg: BacktestConfig) -> BacktestResult:
-    """
-    candles: [ts, open, high, low, close, volume] مرتبة تصاعديًا
-    signal_fn: يجب أن يعتمد على الماضي فقط (لا look-ahead)
-    """
     df = candles.copy().reset_index(drop=True)
     raw = signal_fn(df).fillna(0).astype(int).clip(-1, 1)
     signal = raw.shift(cfg.latency_bars).fillna(0).astype(int)
@@ -65,7 +61,6 @@ def run_backtest(candles: pd.DataFrame,
         px = float(row["close"])
         desired = int(signal.iloc[i])
 
-        # SL / TP
         if position != 0 and entry_px is not None:
             hit = None
             if position == 1:
@@ -84,7 +79,6 @@ def run_backtest(candles: pd.DataFrame,
                 trades.append(t)
                 position, entry_px, entry_size, entry_cost = 0, None, 0.0, 0.0
 
-        # change
         if desired != position:
             if position != 0 and entry_px is not None:
                 equity, t = _close(position, entry_px, px, entry_size,
