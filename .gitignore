@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+storage/
+.venv/
+__pycache__/
+*.pyc
+*.duckdb
+*.parquet
