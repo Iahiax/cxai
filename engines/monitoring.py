@@ -1,16 +1,13 @@
 from __future__ import annotations
-import json, logging, time
+import json, logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-import numpy as np
 import pandas as pd
-
 from data.storage import Storage
 
 
-# أضف لـ schema
 MON_SQL = """
 CREATE TABLE IF NOT EXISTS metrics (
     ts TIMESTAMP, name VARCHAR, value DOUBLE
@@ -22,25 +19,24 @@ CREATE TABLE IF NOT EXISTS alerts (
 """
 
 
-def setup_logging(log_dir: str = "./storage/logs", level: int = logging.INFO):
+def setup_logging(log_dir: str = "./storage/logs",
+                  level: int = logging.INFO):
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     fmt = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
     logging.basicConfig(
-        level=level,
-        format=fmt,
+        level=level, format=fmt,
         handlers=[
             logging.FileHandler(Path(log_dir) / "brain.log", encoding="utf-8"),
             logging.StreamHandler(),
-        ],
-    )
+        ])
     return logging.getLogger("brain")
 
 
 @dataclass
 class AlertRule:
     name: str
-    severity: str          # info | warn | critical
-    predicate: callable    # (metrics: dict) -> bool
+    severity: str
+    predicate: callable
     message: str
 
 
@@ -54,31 +50,23 @@ class Monitor:
                 self.s.con.execute(stmt)
         self.rules: list[AlertRule] = []
 
-    # ---------- metric recording ----------
     def record(self, name: str, value: float):
-        self.s.con.execute(
-            "INSERT INTO metrics VALUES (?,?,?)",
-            [datetime.now(timezone.utc).isoformat(), name, float(value)]
-        )
+        self.s.con.execute("INSERT INTO metrics VALUES (?,?,?)",
+                           [datetime.now(timezone.utc).isoformat(),
+                            name, float(value)])
 
     def snapshot(self) -> dict:
         eq = self.s.con.execute(
-            "SELECT COALESCE(SUM(pnl_net),0) FROM trades"
-        ).fetchone()[0] or 0.0
+            "SELECT COALESCE(SUM(pnl_net),0) FROM trades").fetchone()[0] or 0.0
         open_trades = self.s.con.execute(
-            "SELECT COUNT(*) FROM trades WHERE exit_ts IS NULL"
-        ).fetchone()[0] or 0
+            "SELECT COUNT(*) FROM trades WHERE exit_ts IS NULL").fetchone()[0] or 0
         win_rate = self.s.con.execute("""
             SELECT AVG(CASE WHEN pnl_net > 0 THEN 1.0 ELSE 0.0 END)
             FROM trades WHERE exit_ts IS NOT NULL
         """).fetchone()[0] or 0.0
-        return {
-            "total_pnl": float(eq),
-            "open_trades": int(open_trades),
-            "win_rate": float(win_rate),
-        }
+        return {"total_pnl": float(eq), "open_trades": int(open_trades),
+                "win_rate": float(win_rate)}
 
-    # ---------- alerting ----------
     def add_rule(self, rule: AlertRule):
         self.rules.append(rule)
 
@@ -86,22 +74,19 @@ class Monitor:
         self.add_rule(AlertRule(
             name="drawdown_high", severity="warn",
             predicate=lambda m: m.get("total_pnl", 0) < -1000,
-            message="⚠️ الخسارة التراكمية تجاوزت 1000",
-        ))
+            message="⚠️ الخسارة التراكمية تجاوزت 1000"))
         if risk_engine:
             self.add_rule(AlertRule(
                 name="daily_loss_limit", severity="critical",
                 predicate=lambda m: risk_engine.daily_drawdown_pct() >
                                     risk_engine.limits.daily_loss_limit_pct,
-                message="🛑 وصلت حدّ الخسارة اليومي",
-            ))
+                message="🛑 وصلت حدّ الخسارة اليومي"))
 
     def check(self) -> list[dict]:
         m = self.snapshot()
         self.record("total_pnl", m["total_pnl"])
         self.record("open_trades", m["open_trades"])
         self.record("win_rate", m["win_rate"])
-
         fired = []
         for rule in self.rules:
             try:
@@ -120,13 +105,13 @@ class Monitor:
               json.dumps(metrics, default=str)])
         self.log.warning("[ALERT/%s] %s", rule.severity, rule.message)
         if self.tg:
-            icon = {"info": "ℹ️", "warn": "⚠️", "critical": "🛑"}.get(rule.severity, "•")
+            icon = {"info": "ℹ️", "warn": "⚠️", "critical": "🛑"}.get(
+                rule.severity, "•")
             try:
                 self.tg.send(f"{icon} <b>تنبيه</b> — {rule.name}\n{rule.message}")
             except Exception:
                 pass
 
-    # ---------- health report ----------
     def health_report(self) -> dict:
         last_metrics = self.s.con.execute("""
             SELECT name, value FROM metrics
