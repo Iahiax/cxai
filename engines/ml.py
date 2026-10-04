@@ -12,14 +12,12 @@ try:
 except ImportError:
     HAS_LGB = False
 
-from engines.backtest import BacktestConfig
 from data.storage import Storage
 
 
-# أضف لـ schema
 ML_SQL = """
 CREATE TABLE IF NOT EXISTS ml_runs (
-    id VARCHAR PRIMARY KEY, ts TIMESTAMP DEFAULT currentimestamp,
+    id VARCHAR PRIMARY KEY, ts TIMESTAMP DEFAULT current_timestamp,
     model VARCHAR, params JSON, metrics JSON, artifact VARCHAR
 );
 """
@@ -34,22 +32,14 @@ class TripleBarrierConfig:
     atr_mult_sl: Optional[float] = None
 
 
-def triple_barrier_labels(df: pd.DataFrame,
-                          cfg: TripleBarrierConfig,
+def triple_barrier_labels(df: pd.DataFrame, cfg: TripleBarrierConfig,
                           atr_col: Optional[str] = None) -> pd.Series:
-    """
-    يُرجع سلسلة {-1, 0, +1}: -1=SL، +1=TP، 0=timeout.
-    """
     close = df["close"].values
     high = df["high"].values
     low = df["low"].values
     n = len(df)
     labels = np.zeros(n, dtype=int)
-
-    atr_vals = None
-    if atr_col and atr_col in df:
-        atr_vals = df[atr_col].values
-
+    atr_vals = df[atr_col].values if (atr_col and atr_col in df) else None
     for i in range(n - 1):
         entry = close[i]
         if atr_vals is not None:
@@ -70,7 +60,6 @@ def triple_barrier_labels(df: pd.DataFrame,
 
 
 def purged_embargo_split(n: int, k: int = 5, embargo: int = 24):
-    """Purged K-Fold متقدّم — يمنع تسرّب البيانات المستقبلية."""
     idx = np.arange(n)
     fold = n // k
     for f in range(k):
@@ -79,7 +68,6 @@ def purged_embargo_split(n: int, k: int = 5, embargo: int = 24):
         test = idx[start:end]
         train_mask = np.ones(n, dtype=bool)
         train_mask[start:end] = False
-        # embargo حول الـ test
         lo = max(0, start - embargo)
         hi = min(n, end + embargo)
         train_mask[lo:hi] = False
@@ -95,7 +83,6 @@ class MLEngine:
             if stmt.strip():
                 self.s.con.execute(stmt)
 
-    # ---------- features ----------
     @staticmethod
     def build_features(df: pd.DataFrame) -> pd.DataFrame:
         from engines.indicators import ema, rsi, atr, adx, macd
@@ -108,23 +95,19 @@ class MLEngine:
         out["rsi"] = rsi(df["close"])
         out["atr_norm"] = atr(df) / df["close"]
         out["adx"] = adx(df)
-        m, s, h = macd(df["close"])
+        _, _, h = macd(df["close"])
         out["macd_hist"] = h / df["close"]
         out["range_norm"] = (df["high"] - df["low"]) / df["close"]
         out["vwap_dev"] = df["close"] / df["close"].rolling(20).mean() - 1
         return out.replace([np.inf, -np.inf], np.nan).dropna()
 
-    # ---------- train ----------
-    def train(self, df: pd.DataFrame,
-              label_cfg: TripleBarrierConfig,
+    def train(self, df: pd.DataFrame, label_cfg: TripleBarrierConfig,
               params: dict | None = None) -> dict:
         if not HAS_LGB:
             raise RuntimeError("LightGBM غير مثبّت: pip install lightgbm")
-
         feats = self.build_features(df)
         df_al = df.loc[feats.index]
         labels = triple_barrier_labels(df_al, label_cfg).loc[feats.index]
-        # احذف آخر صف (label غير معروف)
         feats = feats.iloc[:-1]
         labels = labels.iloc[:-1]
 
@@ -143,7 +126,6 @@ class MLEngine:
             preds.iloc[te] = np.argmax(p, axis=1) - 1
 
         acc = float((preds == labels).mean())
-        # accuracy baseline: الفئة الغالبة
         base = float((labels == labels.mode()[0]).mean())
         metrics = {"accuracy": acc, "baseline": base, "edge": acc - base,
                    "n_samples": len(feats)}
