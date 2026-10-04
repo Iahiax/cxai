@@ -3,7 +3,6 @@ import json, time, html
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 import requests
-
 from data.storage import Storage
 
 
@@ -28,7 +27,6 @@ class TelegramBot:
         self._handlers: dict[str, Callable] = {}
         self._offset = 0
 
-    # ---------- low level ----------
     def _rate_limit(self):
         now = time.time()
         self._last_call = [t for t in self._last_call if now - t < 60]
@@ -40,21 +38,18 @@ class TelegramBot:
         self._rate_limit()
         r = requests.post(f"{self.base}/sendMessage", json={
             "chat_id": self.cfg.channel_id,
-            "text": text,
-            "parse_mode": parse_mode,
+            "text": text, "parse_mode": parse_mode,
             "disable_web_page_preview": True,
         }, timeout=15)
         r.raise_for_status()
         return r.json()
 
-    # ---------- authorization ----------
     def _is_allowed(self, user_id: int) -> bool:
         return (not self.cfg.allowed_user_ids) or (user_id in self.cfg.allowed_user_ids)
 
     def _is_admin(self, user_id: int) -> bool:
         return user_id in self.cfg.admin_user_ids
 
-    # ---------- command registration ----------
     def command(self, name: str):
         def deco(fn):
             self._handlers[name] = fn
@@ -67,7 +62,6 @@ class TelegramBot:
             ((SELECT COALESCE(MAX(id),0)+1 FROM audit_log), ?, ?, ?, ?)
         """, [actor, action, json.dumps(payload, default=str), result])
 
-    # ---------- long polling ----------
     def run_forever(self, stop_flag: Callable[[], bool] = lambda: False):
         while not stop_flag():
             try:
@@ -89,22 +83,22 @@ class TelegramBot:
         text = (msg.get("text") or "").strip()
         if not text.startswith("/"):
             return
-
         if not self._is_allowed(user_id):
             self._audit(str(user_id), text, {}, "denied_not_allowed")
             return
-
         cmd = text.split()[0].split("@")[0].lower()
 
-        # dangerous command confirmation
         if cmd in self.cfg.dangerous_commands:
             if not self._is_admin(user_id):
                 self._audit(str(user_id), cmd, {}, "denied_not_admin")
                 return
             pending = self._pending_confirm.get(user_id)
-            if not pending or pending["cmd"] != cmd or time.time() - pending["ts"] > self.cfg.confirm_ttl_seconds:
+            if not pending or pending["cmd"] != cmd or \
+               time.time() - pending["ts"] > self.cfg.confirm_ttl_seconds:
                 code = f"{int(time.time()) % 100000:05d}"
-                self._pending_confirm[user_id] = {"cmd": cmd, "code": code, "ts": time.time()}
+                self._pending_confirm[user_id] = {
+                    "cmd": cmd, "code": code, "ts": time.time()
+                }
                 self.send(f"⚠️ أمر حساس: <code>{html.escape(cmd)}</code>\n"
                           f"للتأكيد أرسل: <code>{cmd} confirm {code}</code>")
                 return
@@ -117,7 +111,6 @@ class TelegramBot:
         if not handler:
             self.send(f"❓ أمر غير معروف: <code>{html.escape(cmd)}</code>")
             return
-
         try:
             result = handler(user_id, text) or "✅ تم"
             self._audit(str(user_id), cmd, {"text": text}, "ok")
@@ -125,15 +118,18 @@ class TelegramBot:
         except Exception as e:
             self._audit(str(user_id), cmd, {"text": text}, f"error:{e}")
             self.send(f"💥 خطأ: <code>{html.escape(str(e))}</code>")
+
+
 def register_default_commands(bot: TelegramBot, storage: Storage, risk_engine=None):
     @bot.command("/start")
     def _start(uid, txt):
-        return "🤖 <b>Capital AI Brain</b> جاهز.\n/حالة — /صفقات — /مخاطر — /اقتراحات — /ايقاف"
+        return ("🤖 <b>Capital AI Brain</b> جاهز.\n"
+                "/حالة — /صفقات — /مخاطر — /اقتراحات — /ايقاف")
 
     @bot.command("/حالة")
     def _status(uid, txt):
-        eq = storage.con.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
-        return f"📊 الصفقات: <b>{eq}</b>"
+        n = storage.con.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        return f"📊 الصفقات: <b>{n}</b>"
 
     @bot.command("/صفقات")
     def _trades(uid, txt):
@@ -142,8 +138,9 @@ def register_default_commands(bot: TelegramBot, storage: Storage, risk_engine=No
         ).df()
         if df.empty:
             return "لا توجد صفقات."
-        lines = [f"• {r.side} — {r.pnl_net:+.2f}" for r in df.itertuples()]
-        return "📈 آخر الصفقات:\n" + "\n".join(lines)
+        return "📈 آخر الصفقات:\n" + "\n".join(
+            f"• {r.side} — {r.pnl_net:+.2f}" for r in df.itertuples()
+        )
 
     @bot.command("/اقتراحات")
     def _proposals(uid, txt):
