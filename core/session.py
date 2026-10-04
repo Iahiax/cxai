@@ -1,4 +1,3 @@
-# core/session.py
 from __future__ import annotations
 import threading, time
 from dataclasses import dataclass, field
@@ -17,6 +16,7 @@ class CapitalSession:
 
     cst: Optional[str] = field(default=None, init=False, repr=False)
     xst: Optional[str] = field(default=None, init=False, repr=False)
+    base_url: str = field(default="", init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _last_refresh: float = field(default=0.0, init=False, repr=False)
     _http: requests.Session = field(init=False, repr=False)
@@ -72,7 +72,6 @@ class CapitalSession:
             self._last_refresh = time.time()
 
     def auth_headers(self) -> dict:
-        # جلسة Capital صالحة ~10 دقائق → نجدّد كل 8 دقائق
         if time.time() - self._last_refresh > 8 * 60:
             self.refresh()
         return {
@@ -84,9 +83,11 @@ class CapitalSession:
 
     def request(self, method: str, path: str, **kwargs) -> requests.Response:
         url = f"{self.base_url}{path}"
-        r = self._http.request(method, url, headers=self.auth_headers(), timeout=20, **kwargs)
+        r = self._http.request(method, url, headers=self.auth_headers(),
+                               timeout=20, **kwargs)
         if r.status_code == 401:
             self.refresh()
-            r = self._http.request(method, url, headers=self.auth_headers(), timeout=20, **kwargs)
+            r = self._http.request(method, url, headers=self.auth_headers(),
+                                   timeout=20, **kwargs)
         r.raise_for_status()
         return r
