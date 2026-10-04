@@ -1,9 +1,8 @@
 from __future__ import annotations
 import asyncio, logging, signal
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, Optional
-
+from typing import Awaitable, Callable
 
 log = logging.getLogger("scheduler")
 
@@ -20,13 +19,12 @@ class Job:
 
 
 class AsyncScheduler:
-    """جدولة خفيفة بلا تبعيات خارجية."""
-
     def __init__(self):
         self.jobs: list[Job] = []
         self._stop = asyncio.Event()
 
-    def add(self, name: str, every_seconds: int, fn, run_on_start: bool = False):
+    def add(self, name: str, every_seconds: int, fn,
+            run_on_start: bool = False):
         self.jobs.append(Job(name, every_seconds, fn, run_on_start))
 
     async def _run_job(self, job: Job):
@@ -76,7 +74,8 @@ class AsyncScheduler:
             log.info("scheduler stopped")
 
 
-def install_signal_handlers(sched: AsyncScheduler, loop: asyncio.AbstractEventLoop):
+def install_signal_handlers(sched: AsyncScheduler,
+                            loop: asyncio.AbstractEventLoop):
     def _handler():
         log.warning("signal received, stopping scheduler")
         sched.stop()
@@ -84,4 +83,4 @@ def install_signal_handlers(sched: AsyncScheduler, loop: asyncio.AbstractEventLo
         try:
             loop.add_signal_handler(sig, _handler)
         except NotImplementedError:
-            pass  # Windows
+            pass
