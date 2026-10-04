@@ -1,3 +1,21 @@
+# أضف إلى SCHEMA_SQL
+EXTRA_SQL = """
+CREATE TABLE IF NOT EXISTS risk_events (
+    id BIGINT, ts TIMESTAMP DEFAULT current_timestamp,
+    kind VARCHAR, severity VARCHAR, detail JSON
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id BIGINT, ts TIMESTAMP DEFAULT current_timestamp,
+    actor VARCHAR, action VARCHAR, payload JSON, result VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS proposals (
+    id BIGINT, created_at TIMESTAMP DEFAULT current_timestamp,
+    kind VARCHAR, title VARCHAR, body VARCHAR,
+    status VARCHAR, score DOUBLE, metrics JSON, meta JSON
+);
+"""
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS candles (
     epic        VARCHAR NOT NULL,
