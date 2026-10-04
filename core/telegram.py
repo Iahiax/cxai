@@ -125,3 +125,40 @@ class TelegramBot:
         except Exception as e:
             self._audit(str(user_id), cmd, {"text": text}, f"error:{e}")
             self.send(f"💥 خطأ: <code>{html.escape(str(e))}</code>")
+def register_default_commands(bot: TelegramBot, storage: Storage, risk_engine=None):
+    @bot.command("/start")
+    def _start(uid, txt):
+        return "🤖 <b>Capital AI Brain</b> جاهز.\n/حالة — /صفقات — /مخاطر — /اقتراحات — /ايقاف"
+
+    @bot.command("/حالة")
+    def _status(uid, txt):
+        eq = storage.con.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+        return f"📊 الصفقات: <b>{eq}</b>"
+
+    @bot.command("/صفقات")
+    def _trades(uid, txt):
+        df = storage.con.execute(
+            "SELECT trade_id, side, pnl_net FROM trades ORDER BY entry_ts DESC LIMIT 10"
+        ).df()
+        if df.empty:
+            return "لا توجد صفقات."
+        lines = [f"• {r.side} — {r.pnl_net:+.2f}" for r in df.itertuples()]
+        return "📈 آخر الصفقات:\n" + "\n".join(lines)
+
+    @bot.command("/اقتراحات")
+    def _proposals(uid, txt):
+        df = storage.list_proposals("pending")
+        if df.empty:
+            return "لا اقتراحات معلّقة."
+        return "\n".join(f"#{r.id} [{r.kind}] {r.title}" for r in df.itertuples())
+
+    if risk_engine:
+        @bot.command("/kill")
+        def _kill(uid, txt):
+            risk_engine.trigger_kill("telegram_manual")
+            return "🛑 Kill switch مُفعّل."
+
+        @bot.command("/استئناف")
+        def _release(uid, txt):
+            risk_engine.release_kill()
+            return "✅ تم تحرير Kill switch."
