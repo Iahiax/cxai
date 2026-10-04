@@ -5,7 +5,6 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 import numpy as np
 import pandas as pd
-
 from data.storage import Storage
 
 
@@ -36,7 +35,9 @@ class RiskEngine:
         self._killed = False
         self._cooldown_until: Optional[datetime] = None
 
-    # ---------- daily PnL ----------
+    def is_killed(self) -> bool:
+        return self._killed
+
     def today_pnl(self) -> float:
         today = date.today().isoformat()
         row = self.storage.con.execute("""
@@ -46,16 +47,14 @@ class RiskEngine:
         return float(row[0] or 0.0)
 
     def equity(self) -> float:
-        row = self.storage.con.execute("""
-            SELECT COALESCE(SUM(pnl_net),0) FROM trades
-        """).fetchone()
-        # fallback إلى رأس مال افتراضي
+        row = self.storage.con.execute(
+            "SELECT COALESCE(SUM(pnl_net),0) FROM trades"
+        ).fetchone()
         return 100_000.0 + float(row[0] or 0.0)
 
     def daily_drawdown_pct(self) -> float:
         return abs(self.today_pnl()) / self.equity() * 100
 
-    # ---------- CVaR ----------
     def cvar_95(self, lookback: int = 200) -> float:
         df = self.storage.con.execute("""
             SELECT pnl_net FROM trades ORDER BY entry_ts DESC LIMIT ?
@@ -67,7 +66,6 @@ class RiskEngine:
         tail = rets[rets <= var95]
         return float(abs(tail.mean() / self.equity() * 100)) if len(tail) else 0.0
 
-    # ---------- Bayesian Kelly ----------
     def kelly_fraction(self, lookback: int = 200) -> float:
         df = self.storage.con.execute("""
             SELECT pnl_net FROM trades ORDER BY entry_ts DESC LIMIT ?
@@ -81,10 +79,8 @@ class RiskEngine:
         p = len(wins) / len(df)
         b = wins.mean() / abs(losses.mean())
         kelly = p - (1 - p) / b
-        # shrinkage: نصف Kelly لتفادي overbetting
         return float(max(0.0, min(kelly * 0.5, 0.25)))
 
-    # ---------- correlation ----------
     def correlation_ok(self, candidates: dict[str, pd.Series]) -> bool:
         if len(candidates) < 2:
             return True
@@ -95,30 +91,26 @@ class RiskEngine:
         np.fill_diagonal(c, 0)
         return c.max() <= self.limits.max_correlation
 
-    # ---------- main gate ----------
     def pre_trade(self, symbol: str, notional: float,
                   concurrent_positions: int) -> RiskDecision:
         if self._killed:
             return RiskDecision(False, "kill_switch_active")
-
         if self._cooldown_until and datetime.now() < self._cooldown_until:
-            return RiskDecision(False, f"cooldown_until_{self._cooldown_until.isoformat()}")
-
+            return RiskDecision(False,
+                                f"cooldown_until_{self._cooldown_until.isoformat()}")
         if self.daily_drawdown_pct() >= self.limits.daily_loss_limit_pct:
             self.trigger_kill("daily_loss_limit_reached")
             return RiskDecision(False, "daily_loss_limit", kill_switch=True)
-
         if concurrent_positions >= self.limits.max_concurrent_positions:
             return RiskDecision(False, "max_concurrent_positions")
-
         exp = notional / max(self.equity(), 1e-9)
         if exp > self.limits.max_exposure_x_equity:
-            return RiskDecision(False, "max_exposure_exceeded",
-                                size_multiplier=self.limits.max_exposure_x_equity / exp)
-
+            return RiskDecision(
+                False, "max_exposure_exceeded",
+                size_multiplier=self.limits.max_exposure_x_equity / exp,
+            )
         if self.cvar_95() > self.limits.max_cvar_95_pct:
             return RiskDecision(False, "cvar_limit")
-
         kelly = self.kelly_fraction()
         mult = min(1.0, kelly / 0.05) if kelly > 0 else 0.5
         return RiskDecision(True, "ok", size_multiplier=mult)
