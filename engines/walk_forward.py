@@ -3,13 +3,10 @@ from dataclasses import dataclass
 from typing import Callable, Iterator
 import numpy as np
 import pandas as pd
-
 from engines.backtest import BacktestConfig, run_backtest
 
 
 class PurgedKFold:
-    """Purged K-Fold مع Embargo — يمنع تسرّب المعلومات المستقبلية."""
-
     def __init__(self, n_splits: int = 5, embargo_frac: float = 0.01):
         self.n_splits = n_splits
         self.embargo_frac = embargo_frac
@@ -43,12 +40,10 @@ def walk_forward(df: pd.DataFrame,
                  embargo_frac: float = 0.01) -> WFResult:
     cv = PurgedKFold(n_splits, embargo_frac)
     fold_metrics, oos_curves = [], []
-
     for i, (_, test_idx) in enumerate(cv.split(len(df))):
         chunk = df.iloc[test_idx].reset_index(drop=True)
         if len(chunk) < 50:
             continue
-        # مهم: signal_fn يستخدم فقط chunk (لا يرى التدريب)
         res = run_backtest(chunk, signal_fn, cfg)
         m = dict(res.metrics)
         m["fold"] = i
@@ -56,16 +51,15 @@ def walk_forward(df: pd.DataFrame,
         m["end"] = str(chunk["ts"].iloc[-1])
         fold_metrics.append(m)
         oos_curves.append(res.equity_curve)
-
     oos = pd.concat(oos_curves).sort_index() if oos_curves else pd.Series(dtype=float)
-    summary = _summarize(fold_metrics)
-    return WFResult(fold_metrics, oos, summary)
+    return WFResult(fold_metrics, oos, _summarize(fold_metrics))
 
 
 def _summarize(fold_metrics: list[dict]) -> dict:
     if not fold_metrics:
         return {}
-    keys = ["sharpe", "total_return", "max_drawdown", "win_rate", "profit_factor", "trades"]
+    keys = ["sharpe", "total_return", "max_drawdown", "win_rate",
+            "profit_factor", "trades"]
     out = {}
     for k in keys:
         vals = [m.get(k, 0.0) for m in fold_metrics if m.get(k) is not None]
@@ -79,10 +73,8 @@ def _summarize(fold_metrics: list[dict]) -> dict:
     return out
 
 
-def champion_challenger(champion_fn, challenger_fn,
-                        df: pd.DataFrame, cfg: BacktestConfig,
-                        n_splits: int = 5) -> dict:
-    """يقارن استراتيجيتين. الفائز = consistency أعلى مع Sharpe أعلى."""
+def champion_challenger(champion_fn, challenger_fn, df: pd.DataFrame,
+                        cfg: BacktestConfig, n_splits: int = 5) -> dict:
     ch_wf = walk_forward(df, champion_fn, cfg, n_splits)
     cl_wf = walk_forward(df, challenger_fn, cfg, n_splits)
     ch, cl = ch_wf.summary, cl_wf.summary
