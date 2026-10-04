@@ -9,7 +9,8 @@ dependencies = [
   "numpy>=1.26",
   "pyarrow>=17",
   "python-dotenv>=1.0",
+  "lightgbm>=4.3",
 ]
 
 [tool.setuptools]
-packages = ["config","core","connectors","data","engines"]
+packages = ["config", "core", "connectors", "data", "engines", "infra"]
